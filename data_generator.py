@@ -118,7 +118,7 @@ def generate_data(seed: int = 7) -> pd.DataFrame:
     tpm = []
     for i in range(n):
         lo = max(k for k in keys if k <= i)
-        hi = min(k for k in keys if k >= i)
+        hi = next((k for k in keys if k >= i), lo)
         v = (TPM_HITOS[lo] if lo == hi
              else TPM_HITOS[lo] + (TPM_HITOS[hi] - TPM_HITOS[lo]) * (i - lo) / (hi - lo))
         tpm.append(np.clip(v + np.random.normal(0, 0.04), 1.5, 14.0))
@@ -181,13 +181,31 @@ def fetch_real_data() -> pd.DataFrame:
     }
 
     dfs = []
+    missing = []
     for col, ticker in tickers.items():
         raw = yf.download(ticker, start="2020-01-01", end="2025-05-16",
                           interval="1d", auto_adjust=True, progress=False)
-        s = raw["Close"].rename(col)
+        if raw.empty:
+            missing.append(ticker)
+            continue
+
+        close_data = raw["Close"]
+        if isinstance(close_data, pd.DataFrame):
+            close_data = close_data.iloc[:, 0]
+        s = close_data.rename(col)
         dfs.append(s)
 
-    df = pd.concat(dfs, axis=1).dropna()
+    if missing and missing != ["^COLCAP"]:
+        raise ValueError(f"No se pudo descargar el/los ticker(s): {', '.join(missing)}")
+
+    df = pd.concat(dfs, axis=1)
+
+    if "COLCAP" in tickers and "^COLCAP" in missing:
+        # Generar COLCAP sintético alineado con las fechas reales descargadas.
+        synthetic = generate_data(seed=7).set_index("Fecha").reindex(df.index)
+        df["COLCAP"] = synthetic["COLCAP"]
+
+    df = df.dropna()
     df.index.name = "Fecha"
     df = df.reset_index()
 
@@ -218,6 +236,6 @@ def fetch_real_data() -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    df = generate_data()
+    df = fetch_real_data()
     print(f"Shape: {df.shape}")
     print(df.describe().round(2))
